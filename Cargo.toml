@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/*"]
+
+[profile.release]
+lto = "thin"
+debug = 2
+panic = "abort"
+
+[patch.crates-io]
+git2 = { path = "../../Sandbox/git2-rs" }
