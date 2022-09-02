@@ -9,10 +9,10 @@ edition = "2021"
 
 git2 = "^0.14"
 anyhow = "1"
-
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "1", features = ["full", "extra-traits"] }
 itertools = "0.10.3"
 rayon = "1"
 venial = "0.4.0"
+bumpalo = { version = "3", features = ["collections"] }

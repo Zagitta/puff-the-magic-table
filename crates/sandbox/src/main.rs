@@ -1,24 +1,57 @@
 use anyhow::{anyhow, Context, Ok};
+use bumpalo::{collections::Vec, Bump};
 use git2::{
-    Blob, Commit, DiffLineType, DiffOptions, Pathspec, PathspecFlags, Repository, Sort, Tree,
+    Blob, Commit, DiffLineType, DiffOptions, Oid, Pathspec, PathspecFlags, Repository, Sort, Time,
+    Tree,
 };
 use itertools::Itertools;
 use quote::ToTokens;
 use std::{
     borrow::Cow,
     collections::HashMap,
+    env,
     ops::{Range, RangeInclusive},
     path::Path,
 };
 use syn::spanned::Spanned;
 
+#[derive(Debug)]
 enum FieldChange<'a> {
     Removed { name: &'a str },
     Added { name: &'a str, ty: &'a str },
     Renamed { from: &'a str, to: &'a str },
 }
 
-type Revision<'a> = Vec<FieldChange<'a>>;
+#[derive(Debug)]
+struct ChangeSet<'b, 'a> {
+    revision: Oid,
+    time: Time,
+    data: Vec<'b, FieldChange<'a>>,
+}
+
+#[derive(Debug)]
+struct TrackedModel<'a> {
+    name: Cow<'a, String>,
+    extent: RangeInclusive<usize>,
+}
+
+#[derive(Debug)]
+struct ChangeColletion<'b, 'a> {
+    change_sets: Vec<'b, ChangeSet<'b, 'a>>,
+}
+
+impl<'b, 'a> ChangeColletion<'b, 'a> {
+    pub fn new(bump: &'b Bump) -> Self {
+        ChangeColletion {
+            change_sets: Vec::new_in(bump),
+        }
+    }
+}
+
+fn foobar() {
+    let b = Bump::new();
+    let cc = ChangeColletion::new(&b);
+}
 
 fn match_with_parent(
     repo: &Repository,
@@ -82,6 +115,7 @@ fn tracking<'a>(
         let mut start_move = start;
         let mut end_move = end;
 
+        let mut foo = vec![];
         repo.diff_blobs(
             Some(&prev_blob),
             None,
@@ -94,6 +128,7 @@ fn tracking<'a>(
             Some(&mut |_d, _h, l| {
                 let content_offset = l.content_offset() as usize;
                 let len = l.content().len();
+                foo.push((l.origin_value(), l.old_lineno().or(l.new_lineno())));
                 match l.origin_value() {
                     DiffLineType::Addition => {
                         if start > content_offset {
@@ -113,9 +148,11 @@ fn tracking<'a>(
                     }
                     _ => {}
                 };
-                true
+                content_offset <= end
             }),
         )?;
+
+        println!("changes: {:#?}", foo);
 
         start = start_move;
         end = end_move;
@@ -188,13 +225,8 @@ fn find_start_end(content: &str, needle: &str) -> Option<(usize, usize)> {
     let start = content.find(needle)?;
     let end = start + content[start..].find('}')? + 1;
     //adjust end to nearest preceding newline
-    let start = content[..start + 1].rfind('\n')?;
+    let start = content[..start + 1].rfind('\n').unwrap_or(start);
     Some((start, end))
-}
-
-struct TrackedModel<'a> {
-    name: Cow<'a, String>,
-    extent: RangeInclusive<usize>,
 }
 
 impl<'a> TrackedModel<'a> {
@@ -202,7 +234,7 @@ impl<'a> TrackedModel<'a> {
         let start = content.find(name.as_str())?;
         let end = start + content[start..].find('}')? + 1;
         //adjust end to nearest preceding newline
-        let start = content[..start + 1].rfind('\n')?;
+        let start = content[..start + 1].rfind('\n').unwrap_or(start);
 
         Some(Self {
             name,
@@ -216,20 +248,30 @@ impl<'a> TrackedModel<'a> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let path = Path::new("E:/Programming/work/fiberplane/api/src/db/");
+    let curr_dir = env::current_dir()?;
+    let repo = Repository::discover(&curr_dir.join("repos/basic"))?;
+    let file_path = Path::new("basic.rs");
 
-    let repo = Repository::discover(&path)?;
-    let path = Path::new("src/db/models.rs");
+    let mut diff_opts = DiffOptions::new();
+    diff_opts.pathspec(file_path);
+    diff_opts.context_lines(0);
+
+    let diff = repo.diff_index_to_workdir(None, Some(&mut diff_opts))?;
+    diff.print(git2::DiffFormat::Raw, |d, h, l| {
+        println!("{:#?}", l);
+        true
+    })?;
 
     let head = repo.head()?;
     let head = head.peel_to_commit()?;
-    let blob = extract_blob(&repo, &head, path)?;
+    let blob = extract_blob(&repo, &head, file_path)?;
     let content = std::str::from_utf8(blob.content())?;
-    let (start, end) = find_start_end(&content, "pub struct Subscriber").unwrap();
+    let (start, end) =
+        find_start_end(&content, "struct Foobar").ok_or(anyhow!("Failed to find struct"))?;
 
     let start_time = std::time::Instant::now();
 
-    tracking(&repo, path, start, end)?;
+    tracking(&repo, file_path, start, end)?;
 
     let end = std::time::Instant::now();
 
